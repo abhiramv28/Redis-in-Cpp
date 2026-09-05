@@ -25,8 +25,8 @@ struct Conn {
 	bool want_close = false;
 
 	// Buffered input and output
-	std::vector<uint8_t> incoming;
-	std::vector<uint8_t> outgoing;
+	Buffer *incoming = new_buffer(64 * 1024);
+	Buffer *outgoing = new_buffer(64 * 1024);
 };
 
 static void fd_set_nb(int fd) {
@@ -70,37 +70,40 @@ static Conn *handle_accept(int fd) {
 }
 
 static bool try_one_request(Conn *conn) {
-	if (conn->incoming.size() < 4) {
+	Buffer *rbuf = conn->incoming;
+	if (buf_size(rbuf) < 4) {
 		return false;
 	}
 
 	uint32_t len = 0;
-	memcpy(&len, conn->incoming.data(), 4);
+	memcpy(&len, rbuf->data_begin, 4);
 	if (len > k_max_msg) {
 		msg("too long");
 		conn->want_close = true;
 		return false;
 	}
 
-	if (4 + len > conn->incoming.size()) {
+	if (4 + len > buf_size(rbuf)) {
 		return false;
 	}
 
-	const uint8_t *request = &conn->incoming[4];
+	const uint8_t *request = rbuf->data_begin + 4;
 	printf("client says: len:%d data:%.*s\n", len, len < 100 ? len : 100,
 		   request);
 
 	// Response (echo)
-	buf_append(conn->outgoing, (const uint8_t *)&len, 4);
-	buf_append(conn->outgoing, request, len);
+	Buffer *wbuf = conn->outgoing;
+	buf_append(wbuf, (const uint8_t *)&len, 4);
+	buf_append(wbuf, request, len);
 
-	buf_consume(conn->incoming, 4 + len);
+	buf_consume(rbuf, 4 + len);
 	return true;
 }
 
 static void handle_write(Conn *conn) {
-	assert(conn->outgoing.size() > 0);
-	ssize_t rv = write(conn->fd, &conn->outgoing[0], conn->outgoing.size());
+	Buffer *wbuf = conn->outgoing;
+	assert(buf_size(wbuf) > 0);
+	ssize_t rv = write(conn->fd, wbuf->data_begin, buf_size(wbuf));
 	if (rv < 0 && errno == EAGAIN) {
 		// Not ready some signal interrupted (EAGAIN generally does not occur in
 		// non-blocking code)
@@ -113,9 +116,9 @@ static void handle_write(Conn *conn) {
 		return;
 	}
 
-	buf_consume(conn->outgoing, size_t(rv));
+	buf_consume(wbuf, size_t(rv));
 
-	if (conn->outgoing.size() == 0) {
+	if (buf_size(wbuf) == 0) {
 		conn->want_read = true;
 		conn->want_write = false;
 	}
@@ -134,12 +137,14 @@ static void handle_read(Conn *conn) {
 		return;
 	}
 
-	buf_append(conn->incoming, buf, (size_t)rv);
+	Buffer *rbuf = conn->incoming;
+	buf_append(rbuf, buf, (size_t)rv);
 
 	while (try_one_request(conn)) {
 	}
 
-	if (conn->outgoing.size() > 0) {
+	Buffer *wbuf = conn->outgoing;
+	if (buf_size(wbuf) > 0) {
 		conn->want_read = false;
 		conn->want_write = true;
 		handle_write(conn);

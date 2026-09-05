@@ -1,6 +1,8 @@
 #include "utils.h"
 #include <assert.h>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -55,10 +57,43 @@ int32_t write_all(int fd, const uint8_t *buf, size_t n) {
 	return 0;
 }
 
-void buf_append(std::vector<uint8_t> &buf, const uint8_t *data, size_t len) {
-	buf.insert(buf.end(), data, data + len);
+// Implement handling of errors while allocation
+void buf_append(Buffer *buf, const uint8_t *data, size_t len) {
+	size_t capacity = buf->buffer_end - buf->buffer_begin;
+	size_t data_size = buf->data_end - buf->data_begin;
+
+	if (buf->buffer_begin != buf->data_begin) {
+		memmove(buf->buffer_begin, buf->data_begin, data_size);
+		buf->data_begin = buf->buffer_begin;
+		buf->data_end = buf->data_begin + data_size;
+	}
+
+	if (len > capacity - data_size) {
+		size_t extra = len - (capacity - data_size);
+		buf->buffer_begin =
+			(uint8_t *)realloc(buf->buffer_begin, capacity + extra);
+
+		buf->buffer_end = buf->buffer_begin + capacity + extra;
+		buf->data_begin = buf->buffer_begin;
+		buf->data_end = buf->data_begin + data_size;
+	}
+
+	memcpy(buf->data_end, data, len);
+	buf->data_end += len;
 }
 
-void buf_consume(std::vector<uint8_t> &buf, size_t n) {
-	buf.erase(buf.begin(), buf.begin() + n);
+void buf_consume(Buffer *buf, size_t n) { buf->data_begin += n; }
+
+size_t buf_size(Buffer *buf) { return buf->data_end - buf->data_begin; }
+
+Buffer *new_buffer(size_t n) {
+	Buffer *buf = (Buffer *)malloc(sizeof(struct Buffer));
+
+	buf->buffer_begin = (uint8_t *)malloc(n * sizeof(uint8_t));
+	buf->buffer_end = buf->buffer_begin + n;
+
+	buf->data_begin = buf->buffer_begin;
+	buf->data_end = buf->buffer_begin;
+
+	return buf;
 }

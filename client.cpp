@@ -16,11 +16,11 @@ static int32_t send_req(int fd, const uint8_t *text, size_t len) {
 	}
 
 	// Send request
-	std::vector<uint8_t> wbuf;
+	Buffer *wbuf = new_buffer(64 * 1024);
 	buf_append(wbuf, (const uint8_t *)&len, 4);
 	buf_append(wbuf, text, len);
 
-	return write_all(fd, wbuf.data(), wbuf.size());
+	return write_all(fd, wbuf->data_begin, buf_size(wbuf));
 }
 
 static int32_t read_res(int fd) {
