@@ -1,45 +1,49 @@
 #include "utils.h"
+#include <cstdint>
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
 
-static int32_t query(int fd, const char *text) {
-	uint32_t len = (uint32_t)strlen(text);
+static int32_t send_req(int fd, const uint8_t *text, size_t len) {
 	if (len > k_max_msg) {
 		return -1;
 	}
 
 	// Send request
-	char wbuf[4 + k_max_msg];
-	memcpy(wbuf, &len, 4);
-	memcpy(&wbuf[4], text, len);
+	std::vector<uint8_t> wbuf;
+	buf_append(wbuf, (const uint8_t *)&len, 4);
+	buf_append(wbuf, text, len);
 
-	int32_t err = write_all(fd, wbuf, 4 + len);
-	if (err) {
-		return err;
-	}
+	return write_all(fd, wbuf.data(), wbuf.size());
+}
 
+static int32_t read_res(int fd) {
 	// 4 byte header
-	char rbuf[4 + k_max_msg];
+	std::vector<uint8_t> rbuf;
+	rbuf.resize(4);
 	errno = 0;
 
-	err = read_full(fd, rbuf, 4);
+	int32_t err = read_full(fd, rbuf.data(), 4);
 	if (err) {
 		msg(errno == 0 ? "EOF" : "read() error");
 		return err;
 	}
 
-	memcpy(&len, rbuf, 4);
+	uint32_t len = 0;
+	memcpy(&len, rbuf.data(), 4);
 	if (len > k_max_msg) {
 		msg("too long");
 		return -1;
 	}
 
 	// Reply body
+	rbuf.resize(4 + len);
 	err = read_full(fd, &rbuf[4], len);
 	if (err) {
 		msg("read() error");
@@ -47,7 +51,7 @@ static int32_t query(int fd, const char *text) {
 	}
 
 	// Do something
-	printf("Server says: %.*s\n", len, &rbuf[4]);
+	printf("len:%u data:%.*s\n", len, len < 100 ? len : 100, &rbuf[4]);
 	return 0;
 }
 
@@ -67,14 +71,21 @@ int main() {
 		die("connect()");
 	}
 
-	int32_t err = query(fd, "hello1");
-	if (err) {
-		goto L_DONE;
+	std::vector<std::string> query_list = {
+		"hello1", "hello2", "hello3", std::string(k_max_msg, 'z'), "hello5"};
+
+	for (const std::string &s : query_list) {
+		int32_t err = send_req(fd, (uint8_t *)s.data(), s.size());
+		if (err) {
+			goto L_DONE;
+		}
 	}
 
-	err = query(fd, "hello2");
-	if (err) {
-		goto L_DONE;
+	for (size_t i = 0; i < query_list.size(); i++) {
+		int32_t err = read_res(fd);
+		if (err) {
+			goto L_DONE;
+		}
 	}
 
 L_DONE:
